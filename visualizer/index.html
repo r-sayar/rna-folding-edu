@@ -69,7 +69,7 @@
   main {
     display: grid;
     grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
-    grid-template-rows: auto auto;
+    grid-template-rows: auto auto auto;
     gap: 16px;
     padding: 16px 20px;
   }
@@ -83,9 +83,11 @@
     margin: 0 0 8px 0; font-size: 13px; color: var(--muted);
     text-transform: uppercase; letter-spacing: 0.05em;
   }
-  #panel-matrix { grid-column: 1; grid-row: 1 / span 2; overflow: auto; }
-  #panel-structure { grid-column: 2; grid-row: 1; }
-  #panel-dotbracket { grid-column: 2; grid-row: 2; }
+  .panel h2 .small { font-weight: 400; color: #94a3b8; text-transform: none; }
+  #panel-matrix     { grid-column: 1; grid-row: 1 / span 2; overflow: auto; }
+  #panel-structure  { grid-column: 2; grid-row: 1; }
+  #panel-3d         { grid-column: 2; grid-row: 2; }
+  #panel-dotbracket { grid-column: 1 / span 2; grid-row: 3; }
 
   /* DP matrix */
   table.dpmatrix {
@@ -144,7 +146,12 @@
   #dotbracket .ch.flash { background: var(--flash); }
 
   /* fornac panel */
-  #rna_ss { width: 100%; height: 360px; }
+  #rna_ss { width: 100%; height: 320px; }
+
+  /* 3Dmol panel */
+  #rna_3d { width: 100%; height: 320px; position: relative; background: #0b1220; border-radius: 6px; }
+  #pdb-status { font-size: 12px; color: var(--muted); margin-top: 6px; min-height: 16px; }
+  #pdb-status.error { color: #b91c1c; }
 
   /* legend */
   .legend {
@@ -172,13 +179,7 @@
 
 <div id="controls">
   <label>Sequence:
-    <select id="preset">
-      <option value="GGGAAACCC">tiny hairpin (9 nt)</option>
-      <option value="CGCGAAUUCGCG" selected>GC hairpin (12 nt)</option>
-      <option value="GGGAAACCCAAAGGGAAACCC">two-hairpin toy (21 nt)</option>
-      <option value="GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA">yeast tRNA-Phe (76 nt — slow)</option>
-      <option value="custom">custom…</option>
-    </select>
+    <select id="preset"></select>
   </label>
   <input type="text" id="seq" value="CGCGAAUUCGCG" autocomplete="off">
   <label>Min loop:
@@ -197,6 +198,10 @@
       <option value="2">turbo</option>
     </select>
   </label>
+  <label>PDB:
+    <input type="text" id="pdbid" value="" placeholder="e.g. 1EHZ" maxlength="4" style="width: 80px; text-transform: uppercase;">
+  </label>
+  <button id="loadpdb">Load 3D</button>
   <span id="status">idle</span>
 </div>
 
@@ -214,8 +219,14 @@
   </section>
 
   <section id="panel-structure" class="panel">
-    <h2>Predicted structure (live fornac render)</h2>
+    <h2>Predicted 2D structure <span class="small">— live fornac render</span></h2>
     <div id="rna_ss"></div>
+  </section>
+
+  <section id="panel-3d" class="panel">
+    <h2>Experimental 3D structure <span class="small">— RCSB PDB via 3Dmol.js</span></h2>
+    <div id="rna_3d"></div>
+    <div id="pdb-status">no PDB loaded</div>
   </section>
 
   <section id="panel-dotbracket" class="panel">
@@ -224,9 +235,12 @@
   </section>
 </main>
 
-<!-- vendored libraries (Apache-2.0, see vendor/fornac/LICENSE) -->
+<!-- vendored libraries -->
+<!-- fornac (Apache-2.0): vendor/fornac/LICENSE -->
 <script src="vendor/fornac/d3.js"></script>
 <script src="vendor/fornac/fornac.js"></script>
+<!-- 3Dmol.js (BSD-3-Clause): vendor/3dmol/LICENSE -->
+<script src="vendor/3dmol/3Dmol-min.js"></script>
 
 <script>
 // ============================================================================
@@ -568,26 +582,118 @@ function stopPlay() {
 }
 
 // ============================================================================
-// 4. Wiring
+// 4. Presets and 3D viewer
+// ============================================================================
+//
+// Each preset can optionally carry a PDB ID — when present, the experimental
+// 3D structure is loaded into the right-hand panel via 3Dmol.js, so you can
+// compare the planar Nussinov result against the real fold.
+
+const PRESETS = [
+  { label: 'tiny hairpin (9 nt)',                       seq: 'GGGAAACCC' },
+  { label: 'GC hairpin (12 nt)',                        seq: 'CGCGAAUUCGCG' },
+  { label: '1ZIH RNA hairpin (12 nt)',                  seq: 'GGGCGCAAGCCU',                                       pdb: '1ZIH' },
+  { label: 'two-hairpin toy (21 nt)',                   seq: 'GGGAAACCCAAAGGGAAACCC' },
+  { label: '1RNK pseudoknot (34 nt) — Nussinov fails',  seq: 'GGCGCAGUGGGCUAGCGCCACUCAAAAGGCCCAU',                  pdb: '1RNK' },
+  { label: '1Y26 adenine riboswitch (71 nt)',           seq: 'CGCUUCAUAUAAUCCUAAUGAUAUGGUUUGGGAGUUUCUACCAAGAGCCUUAAACUCUUGAUUAUGAAGUG', pdb: '1Y26' },
+  { label: '1EHZ yeast tRNA-Phe (76 nt)',               seq: 'GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA', pdb: '1EHZ' },
+];
+
+function populatePresets(defaultIdx) {
+  const sel = $('#preset');
+  sel.innerHTML = '';
+  PRESETS.forEach((p, i) => {
+    const o = document.createElement('option');
+    o.value = String(i); o.textContent = p.label;
+    if (i === defaultIdx) o.selected = true;
+    sel.appendChild(o);
+  });
+  const o = document.createElement('option');
+  o.value = 'custom'; o.textContent = 'custom…';
+  sel.appendChild(o);
+}
+
+let viewer3d = null;
+function setPdbStatus(msg, isError) {
+  const s = $('#pdb-status');
+  s.textContent = msg;
+  s.classList.toggle('error', !!isError);
+}
+
+function loadPdb(id) {
+  id = (id || '').trim().toUpperCase();
+  if (!/^[A-Z0-9]{4}$/.test(id)) {
+    setPdbStatus('enter a 4-character PDB ID', true);
+    return;
+  }
+  const host = document.getElementById('rna_3d');
+  host.innerHTML = '';
+  setPdbStatus(`fetching ${id} from RCSB…`);
+  viewer3d = $3Dmol.createViewer(host, { backgroundColor: '#0b1220' });
+
+  const url = `https://files.rcsb.org/view/${id}.pdb`;
+  fetch(url).then(r => {
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    return r.text();
+  }).then(pdb => {
+    viewer3d.addModel(pdb, 'pdb');
+    // RNA-friendly styling: cartoon for nucleic acids; sticks for ligands
+    viewer3d.setStyle({}, { cartoon: { color: 'spectrum' } });
+    viewer3d.setStyle({ resn: ['A','U','G','C','DA','DT','DG','DC'] },
+                     { cartoon: { color: 'spectrum' }, stick: { radius: 0.15, opacity: 0.7 } });
+    viewer3d.setStyle({ hetflag: true },
+                     { stick: { colorscheme: 'yellowCarbon' }, sphere: { scale: 0.25 } });
+    viewer3d.zoomTo();
+    viewer3d.render();
+    viewer3d.spin('y', 0.6);
+    setPdbStatus(`PDB ${id} loaded — drag to rotate, scroll to zoom`);
+  }).catch(err => {
+    setPdbStatus(`failed to load ${id}: ${err.message}`, true);
+  });
+}
+
+function applyPreset(idx) {
+  if (idx === 'custom') return;
+  const i = parseInt(idx, 10);
+  const p = PRESETS[i];
+  if (!p) return;
+  $('#seq').value = p.seq;
+  $('#pdbid').value = p.pdb || '';
+  reset();
+  if (p.pdb) loadPdb(p.pdb);
+  else { setPdbStatus('no experimental structure for this preset'); }
+}
+
+// ============================================================================
+// 5. Wiring
 // ============================================================================
 
-$('#preset').addEventListener('change', () => {
-  const v = $('#preset').value;
-  if (v !== 'custom') $('#seq').value = v;
-  reset();
-});
+populatePresets(2);   // default to "1ZIH RNA hairpin (12 nt)" — small + has 3D
+$('#preset').addEventListener('change', () => applyPreset($('#preset').value));
 $('#seq').addEventListener('change', () => { $('#preset').value = 'custom'; reset(); });
 $('#minloop').addEventListener('change', reset);
 $('#reset').addEventListener('click', reset);
 $('#step').addEventListener('click', () => stepOnce());
 $('#play').addEventListener('click', play);
+$('#loadpdb').addEventListener('click', () => loadPdb($('#pdbid').value));
+$('#pdbid').addEventListener('keydown', e => { if (e.key === 'Enter') loadPdb($('#pdbid').value); });
 
-// boot
+// boot — apply default preset, then let URL params override
 const params = new URLSearchParams(location.search);
-if (params.has('seq')) $('#seq').value = params.get('seq');
 if (params.has('speed')) $('#speed').value = params.get('speed');
 if (params.has('minloop')) $('#minloop').value = params.get('minloop');
-reset();
+
+if (params.has('seq')) {
+  $('#seq').value = params.get('seq');
+  $('#preset').value = 'custom';
+  reset();
+} else {
+  applyPreset($('#preset').value);
+}
+if (params.has('pdb')) {
+  $('#pdbid').value = params.get('pdb');
+  loadPdb(params.get('pdb'));
+}
 if (params.has('autoplay')) play();
 </script>
 </body>

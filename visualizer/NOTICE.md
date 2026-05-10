@@ -15,6 +15,20 @@ Files: `vendor/fornac/fornac.js`, `vendor/fornac/fornac.css`, `vendor/fornac/d3.
 
 These files are unmodified copies of the upstream releases.
 
+## 3Dmol.js (WebGL molecular viewer for the experimental 3D panel)
+
+Files: `vendor/3dmol/3Dmol-min.js`, `vendor/3dmol/LICENSE`.
+
+- Copyright © 2014 University of Pittsburgh and contributors
+- License: BSD-3-Clause (see `vendor/3dmol/LICENSE`)
+- 3Dmol.js bundles code from GLmol, Three.js, and jQuery — all
+  permissive licenses, attributions inside the same LICENSE file.
+- Upstream: <https://github.com/3dmol/3Dmol.js>
+- Snapshot: v2.5.4 from <https://unpkg.com/3dmol@2.5.4/build/3Dmol-min.js>
+
+Used to fetch and render structures from the RCSB PDB
+(<https://www.rcsb.org>) directly in the browser.
+
 ## Pedagogical inspiration
 
 The "DP matrix + structure side by side" teaching layout follows the

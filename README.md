@@ -21,12 +21,23 @@ same thing on real data.
 ### Browser visualizer
 
 `visualizer/index.html` is a single-page tool that walks through the
-Nussinov DP step-by-step. The DP matrix fills diagonally as a heatmap,
-then the traceback commits one base pair at a time — and after each
-commit the structure on the right is re-rendered with fornac, so you
-literally watch the strand fold from a straight line into a stem-loop.
+Nussinov DP step-by-step. Four panels:
+
+1. **DP matrix** (heatmap) — fills diagonally
+2. **Predicted 2D structure** — re-rendered with [fornac](https://github.com/ViennaRNA/fornac)
+   after each traceback commit, so you literally watch the strand fold
+   from a straight line into a stem-loop
+3. **Experimental 3D structure** — fetched from the RCSB PDB and
+   rendered in cartoon style with [3Dmol.js](https://github.com/3dmol/3Dmol.js),
+   so you can compare Nussinov's planar guess against the real fold
+4. **Dot-bracket strip** — pairs commit one at a time
 
 ![visualizer screenshot](visualizer/preview.png)
+
+Above: the **1RNK pseudoknot**. Nussinov returns two separate hairpins
+(top right) — but the real molecule (bottom right) has crossing pairs,
+which a planar DP can't represent. The visualizer makes that limitation
+visible at a glance.
 
 Open the file directly in a browser, or serve the directory:
 
@@ -36,7 +47,14 @@ python3 -m http.server 8765
 # then open http://localhost:8765/index.html
 ```
 
-URL parameters: `?seq=GGGAAACCC&minloop=3&speed=20&autoplay=1`.
+Or, hosted: <https://r-sayar.github.io/rna-folding-edu/visualizer/>.
+
+URL parameters (all optional):
+`?seq=GGGAAACCC&minloop=3&speed=20&autoplay=1&pdb=1EHZ`.
+
+Built-in presets carry their own PDB IDs where one exists — pick
+"1EHZ yeast tRNA-Phe" or "1Y26 adenine riboswitch" to get the 3D
+structure to load automatically.
 
 ## Why this connection
 
@@ -117,18 +135,25 @@ educational_tools/
 ├── nussinov_vs_efold.py      # ~210 LOC, stdlib + optional efold
 ├── dreem_em_demo.py          # ~210 LOC, numpy + optional matplotlib
 └── visualizer/
-    ├── index.html            # the page (own JS, ~400 lines inline)
-    ├── preview.png           # screenshot of a folded 12-nt hairpin
-    ├── NOTICE.md             # third-party attribution (fornac, RNA-Playground)
-    └── vendor/fornac/        # Apache-2.0 — fornac.js + d3.js + LICENSE
+    ├── index.html            # the page (own JS, ~500 lines inline)
+    ├── preview.png           # screenshot of folded 1RNK pseudoknot
+    ├── NOTICE.md             # third-party attribution
+    └── vendor/
+        ├── fornac/           # Apache-2.0 — fornac.js + d3.js + LICENSE
+        └── 3dmol/            # BSD-3   — 3Dmol-min.js + LICENSE
 ```
 
 ## Credits
 
 - [`fornac`](https://github.com/ViennaRNA/fornac) (Peter Kerpedjiev,
-  Apache-2.0) — the RNA-structure renderer the visualizer uses; vendored
-  from the Backofen Lab's [`vaRRI`](https://github.com/BackofenLab/vaRRI)
+  Apache-2.0) — the 2D RNA-structure renderer; vendored from the
+  Backofen Lab's [`vaRRI`](https://github.com/BackofenLab/vaRRI)
   distribution.
+- [`3Dmol.js`](https://github.com/3dmol/3Dmol.js) (University of
+  Pittsburgh, BSD-3) — the WebGL viewer for experimental 3D PDB
+  structures.
+- [`RCSB PDB`](https://www.rcsb.org) — source of the 3D coordinates
+  (1ZIH, 1RNK, 1Y26, 1EHZ are loaded directly from `files.rcsb.org`).
 - [`RNA-Playground`](https://github.com/BackofenLab/RNA-Playground)
   (Backofen Lab) — the "DP matrix + structure side-by-side" teaching
   layout was the inspiration; the visualizer's JavaScript is original.
