@@ -1,19 +1,42 @@
-# Educational tools — Hölzer RNA lectures × Rouskin Lab
+# Educational tools — Hölzer RNA lectures × research code
 
-Two small, self-contained Python scripts that bridge the FU Berlin
+Small, self-contained demos that bridge the FU Berlin
 "Algorithmische Bioinformatik / RNA analysis" lectures (Hölzer, WS 2024)
-with the Rouskin Lab's research code at <https://github.com/rouskinlab>.
+with research-grade RNA tools — the Rouskin Lab
+(<https://github.com/rouskinlab>) for prediction / probing-ensembles, and
+the Backofen Lab (<https://github.com/BackofenLab>) for visualization.
 
-The goal is *pedagogical*: each script implements the central algorithm
-from scratch in a few hundred lines, then connects it to the
-production-grade Rouskin Lab tool that does the same thing on real data.
+The goal is *pedagogical*: each demo implements the central algorithm
+from scratch, then connects it to a production-grade tool that does the
+same thing on real data.
 
 ## What's here
 
-| File | Lecture concept | Rouskin Lab tool it mirrors |
+| File | Lecture concept | Bridge to research code |
 |---|---|---|
 | `nussinov_vs_efold.py` | RNA secondary-structure prediction, Nussinov DP (Lecture I, "RNA folding") | [`eFold`](https://github.com/rouskinlab/efold) — Evoformer-style deep learning predictor |
 | `dreem_em_demo.py` | Mixture interpretation of probing data (extension of the lecture's "single structure" view) | [`DREEM`](https://github.com/rouskinlab/dreem) / [`SEISMIC-RNA`](https://github.com/rouskinlab/seismic-rna) — EM-based ensemble deconvolution |
+| `visualizer/index.html` | Same Nussinov DP, *animated* | Uses [`fornac`](https://github.com/ViennaRNA/fornac) (Backofen Lab's [`vaRRI`](https://github.com/BackofenLab/vaRRI) ships it); pedagogy modelled on [`RNA-Playground`](https://github.com/BackofenLab/RNA-Playground) |
+
+### Browser visualizer
+
+`visualizer/index.html` is a single-page tool that walks through the
+Nussinov DP step-by-step. The DP matrix fills diagonally as a heatmap,
+then the traceback commits one base pair at a time — and after each
+commit the structure on the right is re-rendered with fornac, so you
+literally watch the strand fold from a straight line into a stem-loop.
+
+![visualizer screenshot](visualizer/preview.png)
+
+Open the file directly in a browser, or serve the directory:
+
+```bash
+cd visualizer
+python3 -m http.server 8765
+# then open http://localhost:8765/index.html
+```
+
+URL parameters: `?seq=GGGAAACCC&minloop=3&speed=20&autoplay=1`.
 
 ## Why this connection
 
@@ -92,5 +115,20 @@ matplotlib is available.
 educational_tools/
 ├── README.md
 ├── nussinov_vs_efold.py      # ~210 LOC, stdlib + optional efold
-└── dreem_em_demo.py          # ~210 LOC, numpy + optional matplotlib
+├── dreem_em_demo.py          # ~210 LOC, numpy + optional matplotlib
+└── visualizer/
+    ├── index.html            # the page (own JS, ~400 lines inline)
+    ├── preview.png           # screenshot of a folded 12-nt hairpin
+    ├── NOTICE.md             # third-party attribution (fornac, RNA-Playground)
+    └── vendor/fornac/        # Apache-2.0 — fornac.js + d3.js + LICENSE
 ```
+
+## Credits
+
+- [`fornac`](https://github.com/ViennaRNA/fornac) (Peter Kerpedjiev,
+  Apache-2.0) — the RNA-structure renderer the visualizer uses; vendored
+  from the Backofen Lab's [`vaRRI`](https://github.com/BackofenLab/vaRRI)
+  distribution.
+- [`RNA-Playground`](https://github.com/BackofenLab/RNA-Playground)
+  (Backofen Lab) — the "DP matrix + structure side-by-side" teaching
+  layout was the inspiration; the visualizer's JavaScript is original.

@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Nussinov visualizer — unstructured → structured</title>
+<link rel="stylesheet" href="vendor/fornac/fornac.css">
+<style>
+  :root {
+    --bg: #fafafa;
+    --panel: #ffffff;
+    --ink: #1f2933;
+    --muted: #5d6b7a;
+    --grid: #e2e8f0;
+    --accent: #2563eb;
+    --accent-soft: #dbeafe;
+    --pair: #16a34a;
+    --pair-soft: #dcfce7;
+    --skip: #f59e0b;
+    --flash: #fde68a;
+  }
+  html, body {
+    margin: 0; padding: 0;
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    color: var(--ink); background: var(--bg);
+  }
+  header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--grid);
+    background: var(--panel);
+  }
+  header h1 {
+    margin: 0 0 4px 0; font-size: 18px;
+  }
+  header p {
+    margin: 0; color: var(--muted); font-size: 13px;
+  }
+  header a { color: var(--accent); }
+
+  #controls {
+    display: flex; gap: 12px; align-items: center; flex-wrap: wrap;
+    padding: 12px 20px; background: var(--panel);
+    border-bottom: 1px solid var(--grid);
+  }
+  #controls label { font-size: 13px; color: var(--muted); }
+  #controls select, #controls input[type=text], #controls button {
+    font: inherit;
+    padding: 6px 10px;
+    border: 1px solid var(--grid); border-radius: 6px;
+    background: white; color: var(--ink);
+  }
+  #controls input[type=text] {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    width: 360px;
+  }
+  #controls button {
+    cursor: pointer;
+  }
+  #controls button.primary {
+    background: var(--accent); color: white; border-color: var(--accent);
+  }
+  #controls button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #status {
+    margin-left: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  main {
+    display: grid;
+    grid-template-columns: minmax(420px, 1fr) minmax(420px, 1fr);
+    grid-template-rows: auto auto;
+    gap: 16px;
+    padding: 16px 20px;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--grid);
+    border-radius: 8px;
+    padding: 12px;
+  }
+  .panel h2 {
+    margin: 0 0 8px 0; font-size: 13px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  #panel-matrix { grid-column: 1; grid-row: 1 / span 2; overflow: auto; }
+  #panel-structure { grid-column: 2; grid-row: 1; }
+  #panel-dotbracket { grid-column: 2; grid-row: 2; }
+
+  /* DP matrix */
+  table.dpmatrix {
+    border-collapse: collapse;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+  }
+  table.dpmatrix th, table.dpmatrix td {
+    width: 26px; height: 26px;
+    text-align: center;
+    border: 1px solid var(--grid);
+    color: var(--ink);
+  }
+  table.dpmatrix th {
+    background: #f1f5f9;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  table.dpmatrix td.below-diagonal { background: #f8fafc; color: transparent; }
+  table.dpmatrix td.empty { color: #cbd5e1; }
+  table.dpmatrix td.filled { background: var(--accent-soft); }
+  /* heatmap intensity via CSS var --t in [0,1] */
+  table.dpmatrix td.filled[style*="--t"] {
+    background: color-mix(in srgb, var(--accent-soft) calc((1 - var(--t)) * 100%), var(--accent) calc(var(--t) * 100%));
+    color: white;
+  }
+  table.dpmatrix td.current {
+    outline: 3px solid var(--flash);
+    outline-offset: -3px;
+  }
+  table.dpmatrix td.traceback-cell { background: var(--pair-soft); }
+  table.dpmatrix td.traceback-cell.committed { background: var(--pair); color: white; }
+
+  /* Dot-bracket strip */
+  #dotbracket {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 16px;
+    line-height: 1.4;
+    white-space: pre;
+    overflow-x: auto;
+    padding: 8px 4px;
+  }
+  #dotbracket .row { display: flex; gap: 0; }
+  #dotbracket .ch {
+    display: inline-block;
+    width: 15px;
+    text-align: center;
+    border-radius: 3px;
+  }
+  #dotbracket .ch.idx {
+    color: var(--muted);
+    font-size: 10px;
+    height: 12px; line-height: 12px;
+  }
+  #dotbracket .ch.pair { color: var(--pair); font-weight: 700; }
+  #dotbracket .ch.flash { background: var(--flash); }
+
+  /* fornac panel */
+  #rna_ss { width: 100%; height: 360px; }
+
+  /* legend */
+  .legend {
+    display: flex; gap: 14px; flex-wrap: wrap;
+    margin-top: 8px; font-size: 12px; color: var(--muted);
+  }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .legend i {
+    width: 12px; height: 12px; border-radius: 3px; display: inline-block;
+    border: 1px solid var(--grid);
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Nussinov visualizer — unstructured → structured</h1>
+  <p>
+    Step through the classic <a href="https://en.wikipedia.org/wiki/Nussinov_algorithm">Nussinov</a> base-pair-maximisation
+    DP. The DP matrix fills diagonally; then the traceback commits one base pair at a time, and the
+    structure on the right is re-rendered with <a href="https://github.com/ViennaRNA/fornac">fornac</a>
+    after each commit — so you literally watch the strand fold.
+  </p>
+</header>
+
+<div id="controls">
+  <label>Sequence:
+    <select id="preset">
+      <option value="GGGAAACCC">tiny hairpin (9 nt)</option>
+      <option value="CGCGAAUUCGCG" selected>GC hairpin (12 nt)</option>
+      <option value="GGGAAACCCAAAGGGAAACCC">two-hairpin toy (21 nt)</option>
+      <option value="GCGGAUUUAGCUCAGUUGGGAGAGCGCCAGACUGAAGAUCUGGAGGUCCUGUGUUCGAUCCACAGAAUUCGCACCA">yeast tRNA-Phe (76 nt — slow)</option>
+      <option value="custom">custom…</option>
+    </select>
+  </label>
+  <input type="text" id="seq" value="CGCGAAUUCGCG" autocomplete="off">
+  <label>Min loop:
+    <select id="minloop">
+      <option>0</option><option>1</option><option>2</option><option selected>3</option><option>4</option>
+    </select>
+  </label>
+  <button id="reset">Reset</button>
+  <button id="step">Step</button>
+  <button id="play" class="primary">Play</button>
+  <label>Speed:
+    <select id="speed">
+      <option value="500">slow</option>
+      <option value="120" selected>medium</option>
+      <option value="20">fast</option>
+      <option value="2">turbo</option>
+    </select>
+  </label>
+  <span id="status">idle</span>
+</div>
+
+<main>
+  <section id="panel-matrix" class="panel">
+    <h2>Nussinov DP matrix &nbsp; M[i][j] = max base pairs in seq[i..j]</h2>
+    <div id="matrix-host"></div>
+    <div class="legend">
+      <span><i style="background: var(--accent-soft)"></i>filled</span>
+      <span><i style="background: var(--accent)"></i>high pair count</span>
+      <span><i style="background: var(--flash)"></i>current cell</span>
+      <span><i style="background: var(--pair)"></i>traceback commit</span>
+      <span><i style="background: var(--pair-soft)"></i>traceback path</span>
+    </div>
+  </section>
+
+  <section id="panel-structure" class="panel">
+    <h2>Predicted structure (live fornac render)</h2>
+    <div id="rna_ss"></div>
+  </section>
+
+  <section id="panel-dotbracket" class="panel">
+    <h2>Dot-bracket — pairs commit one at a time</h2>
+    <div id="dotbracket"></div>
+  </section>
+</main>
+
+<!-- vendored libraries (Apache-2.0, see vendor/fornac/LICENSE) -->
+<script src="vendor/fornac/d3.js"></script>
+<script src="vendor/fornac/fornac.js"></script>
+
+<script>
+// ============================================================================
+// 1. Nussinov algorithm as a step generator
+// ============================================================================
+//
+// Each `next()` yields one of:
+//   { phase: 'fill', i, j, value }                    — DP cell just computed
+//   { phase: 'traceback', kind: 'enter', i, j }       — recursing into M[i][j]
+//   { phase: 'traceback', kind: 'skip',  i, j }       — j unpaired, recurse [i,j-1]
+//   { phase: 'traceback', kind: 'pair',  i, j, k }    — committed pair (k, j)
+//   { phase: 'done', pairs }
+// ============================================================================
+
+const PAIRS = new Set(['AU','UA','GC','CG','GU','UG']);
+function canPair(a, b) { return PAIRS.has(a + b); }
+
+function makeMatrix(n) {
+  const M = new Array(n);
+  for (let i = 0; i < n; i++) M[i] = new Array(n).fill(0);
+  return M;
+}
+
+function* nussinovSteps(seq, minLoop) {
+  const n = seq.length;
+  const M = makeMatrix(n);
+
+  // ---- fill phase (diagonal sweep) ------------------------------------------
+  for (let len = minLoop + 2; len <= n; len++) {
+    for (let i = 0; i + len - 1 < n; i++) {
+      const j = i + len - 1;
+      let best = M[i][j-1];               // case 1: j unpaired
+      for (let k = i; k < j - minLoop; k++) {
+        if (!canPair(seq[k], seq[j])) continue;
+        const left  = k > i ? M[i][k-1] : 0;
+        const right = M[k+1][j-1];
+        if (left + 1 + right > best) best = left + 1 + right;
+      }
+      M[i][j] = best;
+      yield { phase: 'fill', i, j, value: best, M };
+    }
+  }
+
+  // ---- traceback (iterative via explicit stack so we can yield) -------------
+  const pairs = [];
+  const stack = [[0, n-1]];
+  while (stack.length) {
+    const [i, j] = stack.pop();
+    if (j - i <= minLoop) continue;
+    yield { phase: 'traceback', kind: 'enter', i, j, pairs: [...pairs] };
+
+    if (M[i][j] === M[i][j-1]) {
+      // case 1: j stays unpaired
+      stack.push([i, j-1]);
+      yield { phase: 'traceback', kind: 'skip', i, j, pairs: [...pairs] };
+      continue;
+    }
+
+    // case 2: find the k that pairs with j
+    for (let k = i; k < j - minLoop; k++) {
+      if (!canPair(seq[k], seq[j])) continue;
+      const left  = k > i ? M[i][k-1] : 0;
+      const right = M[k+1][j-1];
+      if (M[i][j] === left + 1 + right) {
+        pairs.push([k, j]);
+        if (k > i) stack.push([i, k-1]);
+        stack.push([k+1, j-1]);
+        yield { phase: 'traceback', kind: 'pair', i, j, k, pairs: [...pairs] };
+        break;
+      }
+    }
+  }
+
+  yield { phase: 'done', pairs, M };
+}
+
+function pairsToDotBracket(n, pairs) {
+  const s = new Array(n).fill('.');
+  for (const [a, b] of pairs) { s[a] = '('; s[b] = ')'; }
+  return s.join('');
+}
+
+// ============================================================================
+// 2. Rendering
+// ============================================================================
+
+const $ = sel => document.querySelector(sel);
+
+let state = null;     // { seq, minLoop, gen, lastStep, maxValue, pairs, fornac }
+
+function buildMatrix(seq, minLoop) {
+  const n = seq.length;
+  const host = $('#matrix-host');
+  host.innerHTML = '';
+  const tbl = document.createElement('table');
+  tbl.className = 'dpmatrix';
+
+  // header row: column indices + bases
+  const thead = document.createElement('thead');
+  let hr = document.createElement('tr');
+  hr.appendChild(document.createElement('th'));    // corner
+  hr.appendChild(document.createElement('th'));    // row-label corner
+  for (let j = 0; j < n; j++) {
+    const th = document.createElement('th');
+    th.textContent = j;
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  hr = document.createElement('tr');
+  hr.appendChild(document.createElement('th'));
+  hr.appendChild(document.createElement('th'));
+  for (let j = 0; j < n; j++) {
+    const th = document.createElement('th');
+    th.textContent = seq[j];
+    hr.appendChild(th);
+  }
+  thead.appendChild(hr);
+  tbl.appendChild(thead);
+
+  const tbody = document.createElement('tbody');
+  for (let i = 0; i < n; i++) {
+    const tr = document.createElement('tr');
+    const ih = document.createElement('th');
+    ih.textContent = i;
+    tr.appendChild(ih);
+    const bh = document.createElement('th');
+    bh.textContent = seq[i];
+    tr.appendChild(bh);
+    for (let j = 0; j < n; j++) {
+      const td = document.createElement('td');
+      td.id = `c-${i}-${j}`;
+      if (j < i) {
+        td.className = 'below-diagonal';
+      } else if (j - i <= minLoop) {
+        td.className = 'empty';
+        td.textContent = '0';
+      } else {
+        td.className = 'empty';
+        td.textContent = '·';
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  tbl.appendChild(tbody);
+  host.appendChild(tbl);
+}
+
+function buildDotBracket(seq) {
+  const host = $('#dotbracket');
+  host.innerHTML = '';
+
+  // index ruler every 5
+  const ruler = document.createElement('div'); ruler.className = 'row';
+  for (let i = 0; i < seq.length; i++) {
+    const c = document.createElement('span'); c.className = 'ch idx';
+    c.textContent = (i % 5 === 0) ? String(i) : '';
+    ruler.appendChild(c);
+  }
+  host.appendChild(ruler);
+
+  const seqRow = document.createElement('div'); seqRow.className = 'row';
+  for (const b of seq) {
+    const c = document.createElement('span'); c.className = 'ch';
+    c.textContent = b;
+    seqRow.appendChild(c);
+  }
+  host.appendChild(seqRow);
+
+  const dbRow = document.createElement('div'); dbRow.className = 'row';
+  dbRow.id = 'dbrow';
+  for (let i = 0; i < seq.length; i++) {
+    const c = document.createElement('span'); c.className = 'ch'; c.id = `db-${i}`;
+    c.textContent = '.';
+    dbRow.appendChild(c);
+  }
+  host.appendChild(dbRow);
+}
+
+function paintCell(i, j, value, maxValue) {
+  const td = document.getElementById(`c-${i}-${j}`);
+  if (!td) return;
+  td.classList.remove('empty');
+  td.classList.add('filled');
+  td.textContent = value;
+  if (maxValue > 0) {
+    const t = Math.min(1, value / maxValue);
+    td.style.setProperty('--t', t.toFixed(2));
+  }
+}
+
+function flashCell(i, j) {
+  const td = document.getElementById(`c-${i}-${j}`);
+  if (!td) return;
+  document.querySelectorAll('td.current').forEach(e => e.classList.remove('current'));
+  td.classList.add('current');
+}
+
+function markTraceback(i, j, kind) {
+  const td = document.getElementById(`c-${i}-${j}`);
+  if (!td) return;
+  td.classList.add('traceback-cell');
+  if (kind === 'commit') td.classList.add('committed');
+}
+
+function setStatus(msg) { $('#status').textContent = msg; }
+
+function renderFornac(seq, dotbracket) {
+  const host = document.getElementById('rna_ss');
+  host.innerHTML = '';
+  const container = new fornac.FornaContainer('#rna_ss', {
+    animation: false,                 // we drive the animation ourselves
+    circularizeExternal: false,
+    zoomable: true,
+    initialSize: [host.clientWidth, host.clientHeight],
+    applyForce: true,
+  });
+  container.addRNA(dotbracket, { sequence: seq });
+  state.fornac = container;
+}
+
+function updateDotBracket(pairs, flashIdx) {
+  // reset all cells
+  document.querySelectorAll('#dbrow .ch').forEach(c => {
+    c.textContent = '.';
+    c.className = 'ch';
+  });
+  for (const [a, b] of pairs) {
+    const ca = document.getElementById(`db-${a}`);
+    const cb = document.getElementById(`db-${b}`);
+    if (ca) { ca.textContent = '('; ca.classList.add('pair'); }
+    if (cb) { cb.textContent = ')'; cb.classList.add('pair'); }
+  }
+  if (flashIdx) {
+    for (const i of flashIdx) {
+      const c = document.getElementById(`db-${i}`);
+      if (c) c.classList.add('flash');
+    }
+  }
+}
+
+// ============================================================================
+// 3. Step driver
+// ============================================================================
+
+function reset() {
+  stopPlay();
+  const seq = $('#seq').value.trim().toUpperCase().replace(/T/g, 'U');
+  const minLoop = parseInt($('#minloop').value, 10);
+  if (!/^[ACGU]+$/.test(seq) || seq.length < 2) {
+    setStatus('invalid sequence (use A/C/G/U)');
+    return;
+  }
+  state = {
+    seq, minLoop,
+    gen: nussinovSteps(seq, minLoop),
+    lastStep: null,
+    maxValue: 0,
+    pairs: [],
+    fornac: null,
+    nFill: 0, nFillTotal: 0,
+  };
+  // count fill steps for status
+  for (let len = minLoop + 2; len <= seq.length; len++) {
+    state.nFillTotal += Math.max(0, seq.length - len + 1);
+  }
+  buildMatrix(seq, minLoop);
+  buildDotBracket(seq);
+  renderFornac(seq, '.'.repeat(seq.length));
+  setStatus(`ready — ${seq.length} nt, ${state.nFillTotal} cells to fill`);
+  $('#step').disabled = false;
+  $('#play').disabled = false;
+  $('#play').textContent = 'Play';
+}
+
+function stepOnce() {
+  if (!state) return false;
+  const { value, done } = state.gen.next();
+  if (done || !value) return false;
+  state.lastStep = value;
+
+  if (value.phase === 'fill') {
+    state.maxValue = Math.max(state.maxValue, value.value);
+    paintCell(value.i, value.j, value.value, state.maxValue);
+    flashCell(value.i, value.j);
+    state.nFill++;
+    setStatus(`fill ${state.nFill}/${state.nFillTotal} — M[${value.i}][${value.j}] = ${value.value}`);
+    return true;
+  }
+
+  if (value.phase === 'traceback') {
+    if (value.kind === 'enter') {
+      flashCell(value.i, value.j);
+      markTraceback(value.i, value.j, 'enter');
+      setStatus(`traceback enter [${value.i}, ${value.j}]`);
+    } else if (value.kind === 'skip') {
+      markTraceback(value.i, value.j, 'enter');
+      setStatus(`traceback [${value.i}, ${value.j}] — j unpaired, recurse left`);
+    } else if (value.kind === 'pair') {
+      state.pairs = value.pairs;
+      markTraceback(value.i, value.j, 'commit');
+      updateDotBracket(state.pairs, [value.k, value.j]);
+      // re-render fornac with the new partial structure
+      const db = pairsToDotBracket(state.seq.length, state.pairs);
+      renderFornac(state.seq, db);
+      setStatus(`pair committed: (${value.k}, ${value.j}) — ${state.pairs.length} so far`);
+    }
+    return true;
+  }
+
+  if (value.phase === 'done') {
+    state.pairs = value.pairs;
+    const db = pairsToDotBracket(state.seq.length, state.pairs);
+    updateDotBracket(state.pairs);
+    renderFornac(state.seq, db);
+    setStatus(`done — ${state.pairs.length} base pairs · ${db}`);
+    $('#step').disabled = true;
+    $('#play').disabled = true;
+    return false;
+  }
+  return true;
+}
+
+let playTimer = null;
+function play() {
+  if (playTimer) { stopPlay(); return; }
+  $('#play').textContent = 'Pause';
+  const tick = () => {
+    const speed = parseInt($('#speed').value, 10);
+    const more = stepOnce();
+    if (more) playTimer = setTimeout(tick, speed);
+    else stopPlay();
+  };
+  tick();
+}
+function stopPlay() {
+  if (playTimer) { clearTimeout(playTimer); playTimer = null; }
+  $('#play').textContent = 'Play';
+}
+
+// ============================================================================
+// 4. Wiring
+// ============================================================================
+
+$('#preset').addEventListener('change', () => {
+  const v = $('#preset').value;
+  if (v !== 'custom') $('#seq').value = v;
+  reset();
+});
+$('#seq').addEventListener('change', () => { $('#preset').value = 'custom'; reset(); });
+$('#minloop').addEventListener('change', reset);
+$('#reset').addEventListener('click', reset);
+$('#step').addEventListener('click', () => stepOnce());
+$('#play').addEventListener('click', play);
+
+// boot
+const params = new URLSearchParams(location.search);
+if (params.has('seq')) $('#seq').value = params.get('seq');
+if (params.has('speed')) $('#speed').value = params.get('speed');
+if (params.has('minloop')) $('#minloop').value = params.get('minloop');
+reset();
+if (params.has('autoplay')) play();
+</script>
+</body>
+</html>
