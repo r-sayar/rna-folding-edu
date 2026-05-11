@@ -187,9 +187,10 @@
       <option>0</option><option>1</option><option>2</option><option selected>3</option><option>4</option>
     </select>
   </label>
-  <button id="reset">Reset</button>
-  <button id="step">Step</button>
-  <button id="play" class="primary">Play</button>
+  <button id="reset" title="rewind to before any step">Reset</button>
+  <button id="back"  title="undo last step (←)">◀ Back</button>
+  <button id="play" class="primary" title="play / pause (space)">Play</button>
+  <button id="step"  title="advance one step (→)">Next ▶</button>
   <label>Speed:
     <select id="speed">
       <option value="500">slow</option>
@@ -280,7 +281,7 @@ function* nussinovSteps(seq, minLoop) {
         if (left + 1 + right > best) best = left + 1 + right;
       }
       M[i][j] = best;
-      yield { phase: 'fill', i, j, value: best, M };
+      yield { phase: 'fill', i, j, value: best };
     }
   }
 
@@ -314,7 +315,7 @@ function* nussinovSteps(seq, minLoop) {
     }
   }
 
-  yield { phase: 'done', pairs, M };
+  yield { phase: 'done', pairs: [...pairs] };
 }
 
 function pairsToDotBracket(n, pairs) {
@@ -328,8 +329,6 @@ function pairsToDotBracket(n, pairs) {
 // ============================================================================
 
 const $ = sel => document.querySelector(sel);
-
-let state = null;     // { seq, minLoop, gen, lastStep, maxValue, pairs, fornac }
 
 function buildMatrix(seq, minLoop) {
   const n = seq.length;
@@ -483,100 +482,182 @@ function updateDotBracket(pairs, flashIdx) {
 }
 
 // ============================================================================
-// 3. Step driver
+// 3. Step driver (cursor model — supports Back / Next / Pause)
 // ============================================================================
+//
+// On reset() we eagerly enumerate the entire algorithm into state.steps.
+// state.cursor points to the LAST applied step (-1 = nothing applied yet,
+// steps.length-1 = fully done). Forward = cursor++, replay one step
+// incrementally. Back = cursor--, then clear visuals and re-apply
+// steps[0..cursor] from scratch.
+
+let state = null;
+
+// What dot-bracket the fornac panel is currently showing. Tracked outside
+// of `state` so it survives rebuildUpTo's counter reset — that way we can
+// skip re-rendering fornac when the structure hasn't actually changed.
+let fornacRenderedDb = null;
+function renderFornacIfChanged(db) {
+  if (db === fornacRenderedDb) return;
+  renderFornac(state.seq, db);
+  fornacRenderedDb = db;
+}
 
 function reset() {
-  stopPlay();
+  pausePlay();
   const seq = $('#seq').value.trim().toUpperCase().replace(/T/g, 'U');
   const minLoop = parseInt($('#minloop').value, 10);
   if (!/^[ACGU]+$/.test(seq) || seq.length < 2) {
     setStatus('invalid sequence (use A/C/G/U)');
     return;
   }
+  // Eagerly enumerate all steps. For 76 nt this is ~2700 small objects — fine.
+  const steps = [];
+  for (const s of nussinovSteps(seq, minLoop)) steps.push(s);
+
+  // count fill steps for status display
+  let nFillTotal = 0;
+  for (let len = minLoop + 2; len <= seq.length; len++) {
+    nFillTotal += Math.max(0, seq.length - len + 1);
+  }
+
   state = {
     seq, minLoop,
-    gen: nussinovSteps(seq, minLoop),
-    lastStep: null,
+    steps,
+    cursor: -1,
+    nFillTotal,
+    // running counters (rebuilt during replay)
     maxValue: 0,
+    nFill: 0,
     pairs: [],
-    fornac: null,
-    nFill: 0, nFillTotal: 0,
+    lastDb: '.'.repeat(seq.length),
   };
-  // count fill steps for status
-  for (let len = minLoop + 2; len <= seq.length; len++) {
-    state.nFillTotal += Math.max(0, seq.length - len + 1);
-  }
+
   buildMatrix(seq, minLoop);
   buildDotBracket(seq);
-  renderFornac(seq, '.'.repeat(seq.length));
-  setStatus(`ready — ${seq.length} nt, ${state.nFillTotal} cells to fill`);
-  $('#step').disabled = false;
-  $('#play').disabled = false;
-  $('#play').textContent = 'Play';
+  renderFornac(seq, state.lastDb);
+  fornacRenderedDb = state.lastDb;
+  setStatus(`ready — ${seq.length} nt, ${nFillTotal} cells to fill, ${steps.length} total steps`);
+  updateButtons();
 }
 
-function stepOnce() {
-  if (!state) return false;
-  const { value, done } = state.gen.next();
-  if (done || !value) return false;
-  state.lastStep = value;
+function applyStepInc(step, opts) {
+  // Apply ONE step's visual effect, mutating the running counters in `state`.
+  // opts.deferFornac: skip the fornac re-render (used during full replay so
+  // we render exactly once at the end, not once per pair commit).
+  opts = opts || {};
 
-  if (value.phase === 'fill') {
-    state.maxValue = Math.max(state.maxValue, value.value);
-    paintCell(value.i, value.j, value.value, state.maxValue);
-    flashCell(value.i, value.j);
+  if (step.phase === 'fill') {
+    state.maxValue = Math.max(state.maxValue, step.value);
+    paintCell(step.i, step.j, step.value, state.maxValue);
+    flashCell(step.i, step.j);
     state.nFill++;
-    setStatus(`fill ${state.nFill}/${state.nFillTotal} — M[${value.i}][${value.j}] = ${value.value}`);
-    return true;
+    setStatus(`fill ${state.nFill}/${state.nFillTotal} — M[${step.i}][${step.j}] = ${step.value}`);
+    return;
   }
 
-  if (value.phase === 'traceback') {
-    if (value.kind === 'enter') {
-      flashCell(value.i, value.j);
-      markTraceback(value.i, value.j, 'enter');
-      setStatus(`traceback enter [${value.i}, ${value.j}]`);
-    } else if (value.kind === 'skip') {
-      markTraceback(value.i, value.j, 'enter');
-      setStatus(`traceback [${value.i}, ${value.j}] — j unpaired, recurse left`);
-    } else if (value.kind === 'pair') {
-      state.pairs = value.pairs;
-      markTraceback(value.i, value.j, 'commit');
-      updateDotBracket(state.pairs, [value.k, value.j]);
-      // re-render fornac with the new partial structure
+  if (step.phase === 'traceback') {
+    if (step.kind === 'enter') {
+      flashCell(step.i, step.j);
+      markTraceback(step.i, step.j, 'enter');
+      setStatus(`traceback enter [${step.i}, ${step.j}]`);
+    } else if (step.kind === 'skip') {
+      markTraceback(step.i, step.j, 'enter');
+      setStatus(`traceback [${step.i}, ${step.j}] — j unpaired, recurse left`);
+    } else if (step.kind === 'pair') {
+      state.pairs = step.pairs;
+      markTraceback(step.i, step.j, 'commit');
+      updateDotBracket(state.pairs, [step.k, step.j]);
       const db = pairsToDotBracket(state.seq.length, state.pairs);
-      renderFornac(state.seq, db);
-      setStatus(`pair committed: (${value.k}, ${value.j}) — ${state.pairs.length} so far`);
+      state.lastDb = db;
+      if (!opts.deferFornac) renderFornacIfChanged(db);
+      setStatus(`pair committed: (${step.k}, ${step.j}) — ${state.pairs.length} so far`);
     }
-    return true;
+    return;
   }
 
-  if (value.phase === 'done') {
-    state.pairs = value.pairs;
+  if (step.phase === 'done') {
+    state.pairs = step.pairs;
     const db = pairsToDotBracket(state.seq.length, state.pairs);
     updateDotBracket(state.pairs);
-    renderFornac(state.seq, db);
+    state.lastDb = db;
+    if (!opts.deferFornac) renderFornacIfChanged(db);
     setStatus(`done — ${state.pairs.length} base pairs · ${db}`);
-    $('#step').disabled = true;
-    $('#play').disabled = true;
-    return false;
   }
-  return true;
+}
+
+function rebuildUpTo(idx) {
+  // Reset visuals + counters, then replay steps[0..idx] without
+  // rendering fornac per step. Render once at the end.
+  buildMatrix(state.seq, state.minLoop);
+  buildDotBracket(state.seq);
+  state.maxValue = 0;
+  state.nFill = 0;
+  state.pairs = [];
+  state.lastDb = '.'.repeat(state.seq.length);
+
+  for (let i = 0; i <= idx; i++) {
+    applyStepInc(state.steps[i], { deferFornac: true });
+  }
+
+  // single fornac render — only if the visible structure actually differs
+  // from what fornac is already showing
+  const db = pairsToDotBracket(state.seq.length, state.pairs);
+  state.lastDb = db;
+  renderFornacIfChanged(db);
+
+  if (idx < 0) setStatus(`reset — 0 of ${state.steps.length} steps applied`);
+}
+
+function goForward() {
+  if (!state || state.cursor >= state.steps.length - 1) return false;
+  state.cursor++;
+  applyStepInc(state.steps[state.cursor]);
+  updateButtons();
+  return state.cursor < state.steps.length - 1;
+}
+
+function goBack() {
+  if (!state || state.cursor < 0) return;
+  pausePlay();
+  state.cursor--;
+  rebuildUpTo(state.cursor);
+  updateButtons();
+}
+
+function rewindAll() {
+  if (!state) return;
+  pausePlay();
+  state.cursor = -1;
+  rebuildUpTo(-1);
+  updateButtons();
+}
+
+function updateButtons() {
+  if (!state) return;
+  const atStart = state.cursor < 0;
+  const atEnd   = state.cursor >= state.steps.length - 1;
+  $('#back').disabled = atStart;
+  $('#step').disabled = atEnd;
+  $('#play').disabled = atEnd;
+  if (atEnd) pausePlay();
 }
 
 let playTimer = null;
 function play() {
-  if (playTimer) { stopPlay(); return; }
+  if (!state) return;
+  if (playTimer) { pausePlay(); return; }
+  if (state.cursor >= state.steps.length - 1) return;   // nothing to do
   $('#play').textContent = 'Pause';
   const tick = () => {
     const speed = parseInt($('#speed').value, 10);
-    const more = stepOnce();
+    const more = goForward();
     if (more) playTimer = setTimeout(tick, speed);
-    else stopPlay();
+    else pausePlay();
   };
   tick();
 }
-function stopPlay() {
+function pausePlay() {
   if (playTimer) { clearTimeout(playTimer); playTimer = null; }
   $('#play').textContent = 'Play';
 }
@@ -672,11 +753,21 @@ populatePresets(2);   // default to "1ZIH RNA hairpin (12 nt)" — small + has 3
 $('#preset').addEventListener('change', () => applyPreset($('#preset').value));
 $('#seq').addEventListener('change', () => { $('#preset').value = 'custom'; reset(); });
 $('#minloop').addEventListener('change', reset);
-$('#reset').addEventListener('click', reset);
-$('#step').addEventListener('click', () => stepOnce());
+$('#reset').addEventListener('click', rewindAll);
+$('#back').addEventListener('click', goBack);
+$('#step').addEventListener('click', () => { pausePlay(); goForward(); });
 $('#play').addEventListener('click', play);
 $('#loadpdb').addEventListener('click', () => loadPdb($('#pdbid').value));
 $('#pdbid').addEventListener('keydown', e => { if (e.key === 'Enter') loadPdb($('#pdbid').value); });
+
+// keyboard shortcuts: ←/→ step back/forward, space = play/pause
+document.addEventListener('keydown', e => {
+  // ignore when typing in an input
+  if (e.target.matches('input, select, textarea')) return;
+  if (e.key === 'ArrowLeft')  { e.preventDefault(); goBack(); }
+  else if (e.key === 'ArrowRight') { e.preventDefault(); pausePlay(); goForward(); }
+  else if (e.key === ' ')      { e.preventDefault(); play(); }
+});
 
 // boot — apply default preset, then let URL params override
 const params = new URLSearchParams(location.search);

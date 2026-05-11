@@ -39,6 +39,10 @@ Above: the **1RNK pseudoknot**. Nussinov returns two separate hairpins
 which a planar DP can't represent. The visualizer makes that limitation
 visible at a glance.
 
+Controls: **Reset** rewinds to before any step; **◀ Back** undoes the
+last step; **Play** auto-runs (toggle to Pause); **Next ▶** advances one
+step. Keyboard: ← / → step back / forward, space toggles play.
+
 Open the file directly in a browser, or serve the directory:
 
 ```bash
