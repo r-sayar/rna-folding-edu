@@ -90,13 +90,21 @@
   #panel-dotbracket { grid-column: 1 / span 2; grid-row: 3; }
 
   /* DP matrix */
+  :root { --cell-w: 26px; }
+  .matrix-wrap { margin-bottom: 16px; }
+  .matrix-wrap:last-child { margin-bottom: 0; }
+  .matrix-caption {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px; color: var(--muted);
+    margin-bottom: 4px;
+  }
   table.dpmatrix {
     border-collapse: collapse;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
   }
   table.dpmatrix th, table.dpmatrix td {
-    width: 26px; height: 26px;
+    width: var(--cell-w); height: 26px;
     text-align: center;
     border: 1px solid var(--grid);
     color: var(--ink);
@@ -108,18 +116,25 @@
   }
   table.dpmatrix td.below-diagonal { background: #f8fafc; color: transparent; }
   table.dpmatrix td.empty { color: #cbd5e1; }
-  table.dpmatrix td.filled { background: var(--accent-soft); }
-  /* heatmap intensity via CSS var --t in [0,1] */
-  table.dpmatrix td.filled[style*="--t"] {
-    background: color-mix(in srgb, var(--accent-soft) calc((1 - var(--t)) * 100%), var(--accent) calc(var(--t) * 100%));
+  table.dpmatrix td.inf  { color: #cbd5e1; font-style: italic; }
+  /* favourable cell (Nussinov: high count; Zuker: negative energy) — blue scale */
+  table.dpmatrix td.filled.favorable {
+    background: color-mix(in srgb, var(--accent-soft) calc((1 - var(--t, 0)) * 100%), var(--accent) calc(var(--t, 0) * 100%));
     color: white;
   }
+  /* unfavourable cell (Zuker positive energy: hairpin/loop penalty) — red scale */
+  table.dpmatrix td.filled.unfavorable {
+    background: color-mix(in srgb, #fee2e2 calc((1 - var(--t, 0)) * 100%), #b91c1c calc(var(--t, 0) * 100%));
+    color: white;
+  }
+  /* zero-valued cell with no t set: just light fill */
+  table.dpmatrix td.filled:not([style*="--t"]) { background: #f1f5f9; }
   table.dpmatrix td.current {
     outline: 3px solid var(--flash);
     outline-offset: -3px;
   }
-  table.dpmatrix td.traceback-cell { background: var(--pair-soft); }
-  table.dpmatrix td.traceback-cell.committed { background: var(--pair); color: white; }
+  table.dpmatrix td.traceback-cell { background: var(--pair-soft) !important; color: var(--ink) !important; }
+  table.dpmatrix td.traceback-cell.committed { background: var(--pair) !important; color: white !important; }
 
   /* Dot-bracket strip */
   #dotbracket {
@@ -178,6 +193,12 @@
 </header>
 
 <div id="controls">
+  <label>Algorithm:
+    <select id="algo">
+      <option value="nussinov" selected>Nussinov (max base pairs)</option>
+      <option value="zuker">Zuker (min free energy, simplified)</option>
+    </select>
+  </label>
   <label>Sequence:
     <select id="preset"></select>
   </label>
@@ -208,11 +229,11 @@
 
 <main>
   <section id="panel-matrix" class="panel">
-    <h2>Nussinov DP matrix &nbsp; M[i][j] = max base pairs in seq[i..j]</h2>
+    <h2 id="matrix-title">DP matrix</h2>
     <div id="matrix-host"></div>
     <div class="legend">
-      <span><i style="background: var(--accent-soft)"></i>filled</span>
-      <span><i style="background: var(--accent)"></i>high pair count</span>
+      <span><i style="background: var(--accent)"></i>favorable (high count / low energy)</span>
+      <span><i style="background: #b91c1c"></i>unfavorable (loop penalty)</span>
       <span><i style="background: var(--flash)"></i>current cell</span>
       <span><i style="background: var(--pair)"></i>traceback commit</span>
       <span><i style="background: var(--pair-soft)"></i>traceback path</span>
@@ -281,7 +302,7 @@ function* nussinovSteps(seq, minLoop) {
         if (left + 1 + right > best) best = left + 1 + right;
       }
       M[i][j] = best;
-      yield { phase: 'fill', i, j, value: best };
+      yield { phase: 'fill', matrix: 'M', i, j, value: best };
     }
   }
 
@@ -291,12 +312,12 @@ function* nussinovSteps(seq, minLoop) {
   while (stack.length) {
     const [i, j] = stack.pop();
     if (j - i <= minLoop) continue;
-    yield { phase: 'traceback', kind: 'enter', i, j, pairs: [...pairs] };
+    yield { phase: 'traceback', kind: 'enter', matrix: 'M', i, j, pairs: [...pairs] };
 
     if (M[i][j] === M[i][j-1]) {
       // case 1: j stays unpaired
       stack.push([i, j-1]);
-      yield { phase: 'traceback', kind: 'skip', i, j, pairs: [...pairs] };
+      yield { phase: 'traceback', kind: 'skip', matrix: 'M', i, j, pairs: [...pairs] };
       continue;
     }
 
@@ -309,7 +330,7 @@ function* nussinovSteps(seq, minLoop) {
         pairs.push([k, j]);
         if (k > i) stack.push([i, k-1]);
         stack.push([k+1, j-1]);
-        yield { phase: 'traceback', kind: 'pair', i, j, k, pairs: [...pairs] };
+        yield { phase: 'traceback', kind: 'pair', matrix: 'M', i, j, k, pairs: [...pairs] };
         break;
       }
     }
@@ -317,6 +338,202 @@ function* nussinovSteps(seq, minLoop) {
 
   yield { phase: 'done', pairs: [...pairs] };
 }
+
+// ============================================================================
+// 1b. Zuker algorithm (simplified — V + W matrices, integer pseudo-energies)
+// ============================================================================
+//
+// Two matrices:
+//   V[i][j] = min energy for seq[i..j] GIVEN that (i, j) form a base pair
+//   W[i][j] = min energy for seq[i..j] regardless of pairing at the ends
+//
+// V recurrence (four cases, all integer pseudo-energies):
+//   1. Hairpin loop:        E_HP(loop_len)
+//   2. Stack:               E_STACK + V[i+1][j-1]
+//   3. Internal loop/bulge: E_LOOP(left_unp, right_unp) + V[k][l]
+//     (we skip true multi-loops; multi-stem structures are still discoverable
+//      via W at the *exterior* — but a multi-loop inside a closing pair won't
+//      be modelled. tRNA-style cloverleaves therefore won't fold optimally.)
+//
+// W recurrence (same shape as Nussinov):
+//   W[i][j] = min(W[i][j-1],  min_k W[i][k-1] + V[k][j])
+//
+// "+∞" is represented as ZUKER_INF — kept as a number so comparisons work.
+
+const ZUKER_INF      = 999;
+const Z_STACK        = -3;     // per stacked pair (favourable)
+const Z_HAIRPIN_BASE = 5;      // hairpin penalty at minimum loop size
+const Z_HAIRPIN_PER  = 1;      // per extra unpaired base in the loop
+const Z_LOOP_BASE    = 3;      // internal/bulge penalty
+const Z_LOOP_PER     = 1;      // per unpaired base in internal loop
+const Z_MAX_LOOP     = 6;      // max unpaired bases on either side of internal loop
+
+function zHairpin(loopLen) {
+  if (loopLen < 3) return ZUKER_INF;
+  return Z_HAIRPIN_BASE + Z_HAIRPIN_PER * (loopLen - 3);
+}
+function zLoop(leftUnp, rightUnp) {
+  return Z_LOOP_BASE + Z_LOOP_PER * (leftUnp + rightUnp);
+}
+
+function* zukerSteps(seq, minLoop) {
+  const n = seq.length;
+  const V = makeMatrix(n);
+  const W = makeMatrix(n);
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) V[i][j] = ZUKER_INF;
+  // W stays 0 on diagonal and below — empty intervals contribute no energy
+
+  // ---- fill phase --------------------------------------------------------
+  // For each (i, j) in order of increasing length we compute V[i][j] first
+  // (it depends on V at smaller intervals), then W[i][j] (depends on V[k][j]
+  // for the current j and W[i][k-1] for earlier k).
+  for (let len = minLoop + 2; len <= n; len++) {
+    for (let i = 0; i + len - 1 < n; i++) {
+      const j = i + len - 1;
+
+      // ---- V[i][j] ----
+      let bestV = ZUKER_INF;
+      if (canPair(seq[i], seq[j])) {
+        // case 1: hairpin
+        bestV = Math.min(bestV, zHairpin(j - i - 1));
+        // case 2: stack
+        if (len >= 4 && V[i+1][j-1] < ZUKER_INF && canPair(seq[i+1], seq[j-1])) {
+          bestV = Math.min(bestV, Z_STACK + V[i+1][j-1]);
+        }
+        // case 3: internal loop / bulge (any other inner pair (k,l))
+        const kHi = Math.min(j - minLoop - 1, i + Z_MAX_LOOP + 1);
+        for (let k = i + 1; k <= kHi; k++) {
+          const lLo = Math.max(k + minLoop + 1, j - Z_MAX_LOOP - 1);
+          for (let l = lLo; l < j; l++) {
+            if (k === i + 1 && l === j - 1) continue;          // that's a stack
+            if (V[k][l] >= ZUKER_INF) continue;
+            if (!canPair(seq[k], seq[l])) continue;
+            bestV = Math.min(bestV, zLoop(k - i - 1, j - l - 1) + V[k][l]);
+          }
+        }
+      }
+      V[i][j] = bestV;
+      yield { phase: 'fill', matrix: 'V', i, j,
+              value: bestV >= ZUKER_INF ? null : bestV };
+
+      // ---- W[i][j] ----
+      let bestW = W[i][j-1];                                   // j unpaired
+      for (let k = i; k <= j - minLoop - 1; k++) {
+        if (V[k][j] >= ZUKER_INF) continue;
+        const left = k > i ? W[i][k-1] : 0;
+        bestW = Math.min(bestW, left + V[k][j]);
+      }
+      W[i][j] = bestW;
+      yield { phase: 'fill', matrix: 'W', i, j, value: bestW };
+    }
+  }
+
+  // ---- traceback ----------------------------------------------------------
+  // Walk W from W[0][n-1]. When W chooses "k pairs with j" we descend into
+  // V[k][j], emit the pair, then dispatch on whichever V case was minimal
+  // (hairpin terminates, stack/internal-loop recurse).
+  const pairs = [];
+  const stack = [{ matrix: 'W', i: 0, j: n - 1 }];
+
+  while (stack.length) {
+    const cur = stack.pop();
+    const { matrix, i, j } = cur;
+    if (j - i <= minLoop && matrix === 'W') continue;
+    if (j - i < minLoop + 1 && matrix === 'V') continue;
+
+    if (matrix === 'W') {
+      yield { phase: 'traceback', kind: 'enter', matrix: 'W', i, j, pairs: [...pairs] };
+      // case a: j unpaired
+      if (W[i][j] === W[i][j-1]) {
+        stack.push({ matrix: 'W', i, j: j - 1 });
+        yield { phase: 'traceback', kind: 'skip', matrix: 'W', i, j, pairs: [...pairs] };
+        continue;
+      }
+      // case b: some k pairs with j → descend into V[k][j]
+      let found = false;
+      for (let k = i; k <= j - minLoop - 1 && !found; k++) {
+        if (V[k][j] >= ZUKER_INF) continue;
+        const left = k > i ? W[i][k-1] : 0;
+        if (W[i][j] === left + V[k][j]) {
+          if (k > i) stack.push({ matrix: 'W', i, j: k - 1 });
+          stack.push({ matrix: 'V', i: k, j });
+          yield { phase: 'traceback', kind: 'descend', matrix: 'W',
+                  i, j, k, pairs: [...pairs] };
+          found = true;
+        }
+      }
+      continue;
+    }
+
+    // matrix === 'V': (i, j) form a base pair
+    pairs.push([i, j]);
+    yield { phase: 'traceback', kind: 'pair', matrix: 'V',
+            i, j, k: i, pairs: [...pairs] };
+    if (!canPair(seq[i], seq[j])) continue;
+
+    // dispatch on which V-case minimized
+    let found = false;
+
+    // hairpin?
+    if (V[i][j] === zHairpin(j - i - 1)) {
+      yield { phase: 'traceback', kind: 'hairpin', matrix: 'V', i, j,
+              pairs: [...pairs] };
+      found = true;
+    }
+    // stack?
+    if (!found && j - i >= 4 && V[i+1][j-1] < ZUKER_INF
+        && canPair(seq[i+1], seq[j-1])
+        && V[i][j] === Z_STACK + V[i+1][j-1]) {
+      stack.push({ matrix: 'V', i: i + 1, j: j - 1 });
+      yield { phase: 'traceback', kind: 'stack', matrix: 'V', i, j,
+              pairs: [...pairs] };
+      found = true;
+    }
+    // internal loop / bulge?
+    if (!found) {
+      const kHi = Math.min(j - minLoop - 1, i + Z_MAX_LOOP + 1);
+      outer:
+      for (let k = i + 1; k <= kHi; k++) {
+        const lLo = Math.max(k + minLoop + 1, j - Z_MAX_LOOP - 1);
+        for (let l = lLo; l < j; l++) {
+          if (k === i + 1 && l === j - 1) continue;
+          if (V[k][l] >= ZUKER_INF) continue;
+          if (!canPair(seq[k], seq[l])) continue;
+          if (V[i][j] === zLoop(k - i - 1, j - l - 1) + V[k][l]) {
+            stack.push({ matrix: 'V', i: k, j: l });
+            yield { phase: 'traceback', kind: 'internal', matrix: 'V',
+                    i, j, ki: k, kj: l, pairs: [...pairs] };
+            found = true;
+            break outer;
+          }
+        }
+      }
+    }
+  }
+
+  yield { phase: 'done', pairs: [...pairs] };
+}
+
+// Algorithm registry: each entry describes which matrices to render and
+// which step generator to use. UI swaps these via the #algo <select>.
+const ALGORITHMS = {
+  nussinov: {
+    label: 'Nussinov (max base pairs)',
+    matrices: [{ name: 'M', title: "M[i][j] — max base pairs in seq[i..j]" }],
+    steps: nussinovSteps,
+    cellWidthPx: 26,
+  },
+  zuker: {
+    label: 'Zuker (min free energy, simplified)',
+    matrices: [
+      { name: 'W', title: "W[i][j] — min energy of seq[i..j], any pairing" },
+      { name: 'V', title: "V[i][j] — min energy GIVEN that (i, j) pair" },
+    ],
+    steps: zukerSteps,
+    cellWidthPx: 34,
+    infValue: ZUKER_INF,
+  },
+};
 
 function pairsToDotBracket(n, pairs) {
   const s = new Array(n).fill('.');
@@ -330,62 +547,70 @@ function pairsToDotBracket(n, pairs) {
 
 const $ = sel => document.querySelector(sel);
 
-function buildMatrix(seq, minLoop) {
+function buildMatrices(seq, minLoop, matrixSpecs) {
+  // matrixSpecs: [{ name, title }] — one entry per DP matrix to render.
+  // For Nussinov: [{ name: 'M', title: '...' }]; for Zuker: W and V stacked.
   const n = seq.length;
   const host = $('#matrix-host');
   host.innerHTML = '';
-  const tbl = document.createElement('table');
-  tbl.className = 'dpmatrix';
 
-  // header row: column indices + bases
-  const thead = document.createElement('thead');
-  let hr = document.createElement('tr');
-  hr.appendChild(document.createElement('th'));    // corner
-  hr.appendChild(document.createElement('th'));    // row-label corner
-  for (let j = 0; j < n; j++) {
-    const th = document.createElement('th');
-    th.textContent = j;
-    hr.appendChild(th);
-  }
-  thead.appendChild(hr);
-  hr = document.createElement('tr');
-  hr.appendChild(document.createElement('th'));
-  hr.appendChild(document.createElement('th'));
-  for (let j = 0; j < n; j++) {
-    const th = document.createElement('th');
-    th.textContent = seq[j];
-    hr.appendChild(th);
-  }
-  thead.appendChild(hr);
-  tbl.appendChild(thead);
-
-  const tbody = document.createElement('tbody');
-  for (let i = 0; i < n; i++) {
-    const tr = document.createElement('tr');
-    const ih = document.createElement('th');
-    ih.textContent = i;
-    tr.appendChild(ih);
-    const bh = document.createElement('th');
-    bh.textContent = seq[i];
-    tr.appendChild(bh);
-    for (let j = 0; j < n; j++) {
-      const td = document.createElement('td');
-      td.id = `c-${i}-${j}`;
-      if (j < i) {
-        td.className = 'below-diagonal';
-      } else if (j - i <= minLoop) {
-        td.className = 'empty';
-        td.textContent = '0';
-      } else {
-        td.className = 'empty';
-        td.textContent = '·';
-      }
-      tr.appendChild(td);
+  for (const spec of matrixSpecs) {
+    const wrap = document.createElement('div');
+    wrap.className = 'matrix-wrap';
+    if (matrixSpecs.length > 1) {
+      const cap = document.createElement('div');
+      cap.className = 'matrix-caption';
+      cap.textContent = spec.title;
+      wrap.appendChild(cap);
     }
-    tbody.appendChild(tr);
+
+    const tbl = document.createElement('table');
+    tbl.className = 'dpmatrix';
+    tbl.dataset.matrix = spec.name;
+
+    const thead = document.createElement('thead');
+    let hr = document.createElement('tr');
+    hr.appendChild(document.createElement('th'));
+    hr.appendChild(document.createElement('th'));
+    for (let j = 0; j < n; j++) {
+      const th = document.createElement('th'); th.textContent = j; hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    hr = document.createElement('tr');
+    hr.appendChild(document.createElement('th'));
+    hr.appendChild(document.createElement('th'));
+    for (let j = 0; j < n; j++) {
+      const th = document.createElement('th'); th.textContent = seq[j]; hr.appendChild(th);
+    }
+    thead.appendChild(hr);
+    tbl.appendChild(thead);
+
+    const tbody = document.createElement('tbody');
+    for (let i = 0; i < n; i++) {
+      const tr = document.createElement('tr');
+      const ih = document.createElement('th'); ih.textContent = i; tr.appendChild(ih);
+      const bh = document.createElement('th'); bh.textContent = seq[i]; tr.appendChild(bh);
+      for (let j = 0; j < n; j++) {
+        const td = document.createElement('td');
+        td.id = `c-${spec.name}-${i}-${j}`;
+        if (j < i) {
+          td.className = 'below-diagonal';
+        } else if (j - i <= minLoop) {
+          td.className = 'empty';
+          td.textContent = spec.name === 'V' ? '∞' : '0';
+          if (spec.name === 'V') td.classList.add('inf');
+        } else {
+          td.className = 'empty';
+          td.textContent = '·';
+        }
+        tr.appendChild(td);
+      }
+      tbody.appendChild(tr);
+    }
+    tbl.appendChild(tbody);
+    wrap.appendChild(tbl);
+    host.appendChild(wrap);
   }
-  tbl.appendChild(tbody);
-  host.appendChild(tbl);
 }
 
 function buildDotBracket(seq) {
@@ -419,27 +644,51 @@ function buildDotBracket(seq) {
   host.appendChild(dbRow);
 }
 
-function paintCell(i, j, value, maxValue) {
-  const td = document.getElementById(`c-${i}-${j}`);
+function paintCell(matrix, i, j, value, range) {
+  const td = document.getElementById(`c-${matrix}-${i}-${j}`);
   if (!td) return;
   td.classList.remove('empty');
+  td.classList.remove('inf');
   td.classList.add('filled');
-  td.textContent = value;
-  if (maxValue > 0) {
-    const t = Math.min(1, value / maxValue);
+  if (value === null) {
+    td.textContent = '∞';
+    td.classList.add('inf');
+    td.style.removeProperty('--t');
+    td.classList.remove('favorable', 'unfavorable');
+    return;
+  }
+  td.textContent = String(value);
+  // Heatmap: negative = favorable (blue scale), positive = unfavorable (red scale).
+  // For a count-style matrix (Nussinov M) all values ≥ 0 — there `range.invert`
+  // is true so we still treat high counts as favorable.
+  td.classList.remove('favorable', 'unfavorable');
+  if (value === 0) {
+    td.style.removeProperty('--t');
+  } else if (range.invert) {
+    // Nussinov: high value = favorable (blue)
+    const t = range.max > 0 ? Math.min(1, value / range.max) : 0;
     td.style.setProperty('--t', t.toFixed(2));
+    td.classList.add('favorable');
+  } else if (value < 0) {
+    const t = range.min < 0 ? Math.min(1, value / range.min) : 0;
+    td.style.setProperty('--t', t.toFixed(2));
+    td.classList.add('favorable');
+  } else {
+    const t = range.max > 0 ? Math.min(1, value / range.max) : 0;
+    td.style.setProperty('--t', t.toFixed(2));
+    td.classList.add('unfavorable');
   }
 }
 
-function flashCell(i, j) {
-  const td = document.getElementById(`c-${i}-${j}`);
+function flashCell(matrix, i, j) {
+  const td = document.getElementById(`c-${matrix}-${i}-${j}`);
   if (!td) return;
   document.querySelectorAll('td.current').forEach(e => e.classList.remove('current'));
   td.classList.add('current');
 }
 
-function markTraceback(i, j, kind) {
-  const td = document.getElementById(`c-${i}-${j}`);
+function markTraceback(matrix, i, j, kind) {
+  const td = document.getElementById(`c-${matrix}-${i}-${j}`);
   if (!td) return;
   td.classList.add('traceback-cell');
   if (kind === 'commit') td.classList.add('committed');
@@ -507,37 +756,54 @@ function reset() {
   pausePlay();
   const seq = $('#seq').value.trim().toUpperCase().replace(/T/g, 'U');
   const minLoop = parseInt($('#minloop').value, 10);
+  const algoKey = $('#algo').value;
+  const algo = ALGORITHMS[algoKey];
   if (!/^[ACGU]+$/.test(seq) || seq.length < 2) {
     setStatus('invalid sequence (use A/C/G/U)');
     return;
   }
   // Eagerly enumerate all steps. For 76 nt this is ~2700 small objects — fine.
   const steps = [];
-  for (const s of nussinovSteps(seq, minLoop)) steps.push(s);
+  for (const s of algo.steps(seq, minLoop)) steps.push(s);
 
-  // count fill steps for status display
+  // count fill steps per matrix for status display
   let nFillTotal = 0;
   for (let len = minLoop + 2; len <= seq.length; len++) {
     nFillTotal += Math.max(0, seq.length - len + 1);
   }
+  nFillTotal *= algo.matrices.length;   // each (i,j) computed once per matrix
+
+  // Per-matrix range for heatmap normalisation. Init each matrix's range to
+  // (min:0, max:0); applyStepInc grows it as cells are computed.
+  const matrixRange = {};
+  for (const m of algo.matrices) {
+    matrixRange[m.name] = { min: 0, max: 0, invert: algoKey === 'nussinov' };
+  }
 
   state = {
     seq, minLoop,
+    algoKey, algo,
     steps,
     cursor: -1,
     nFillTotal,
-    // running counters (rebuilt during replay)
-    maxValue: 0,
     nFill: 0,
     pairs: [],
     lastDb: '.'.repeat(seq.length),
+    matrixRange,
   };
 
-  buildMatrix(seq, minLoop);
+  // Apply per-algorithm cell width via CSS variable
+  document.documentElement.style.setProperty('--cell-w', `${algo.cellWidthPx}px`);
+  // Update the matrix-panel title to reflect the chosen algorithm
+  $('#matrix-title').textContent = algoKey === 'zuker'
+    ? 'Zuker DP matrices — W (best) and V (given that i, j pair)'
+    : 'Nussinov DP matrix — M[i][j] = max base pairs in seq[i..j]';
+
+  buildMatrices(seq, minLoop, algo.matrices);
   buildDotBracket(seq);
   renderFornac(seq, state.lastDb);
   fornacRenderedDb = state.lastDb;
-  setStatus(`ready — ${seq.length} nt, ${nFillTotal} cells to fill, ${steps.length} total steps`);
+  setStatus(`ready — ${algo.label}; ${seq.length} nt, ${steps.length} total steps`);
   updateButtons();
 }
 
@@ -548,30 +814,48 @@ function applyStepInc(step, opts) {
   opts = opts || {};
 
   if (step.phase === 'fill') {
-    state.maxValue = Math.max(state.maxValue, step.value);
-    paintCell(step.i, step.j, step.value, state.maxValue);
-    flashCell(step.i, step.j);
+    const m = step.matrix;
+    const range = state.matrixRange[m];
+    if (step.value !== null) {
+      if (step.value > range.max) range.max = step.value;
+      if (step.value < range.min) range.min = step.value;
+    }
+    paintCell(m, step.i, step.j, step.value, range);
+    flashCell(m, step.i, step.j);
     state.nFill++;
-    setStatus(`fill ${state.nFill}/${state.nFillTotal} — M[${step.i}][${step.j}] = ${step.value}`);
+    const display = step.value === null ? '∞' : step.value;
+    setStatus(`fill ${state.nFill}/${state.nFillTotal} — ${m}[${step.i}][${step.j}] = ${display}`);
     return;
   }
 
   if (step.phase === 'traceback') {
+    const m = step.matrix;
     if (step.kind === 'enter') {
-      flashCell(step.i, step.j);
-      markTraceback(step.i, step.j, 'enter');
-      setStatus(`traceback enter [${step.i}, ${step.j}]`);
+      flashCell(m, step.i, step.j);
+      markTraceback(m, step.i, step.j, 'enter');
+      setStatus(`traceback enter ${m}[${step.i}, ${step.j}]`);
     } else if (step.kind === 'skip') {
-      markTraceback(step.i, step.j, 'enter');
-      setStatus(`traceback [${step.i}, ${step.j}] — j unpaired, recurse left`);
+      markTraceback(m, step.i, step.j, 'enter');
+      setStatus(`traceback ${m}[${step.i}, ${step.j}] — j unpaired, recurse left`);
+    } else if (step.kind === 'descend') {
+      // Zuker W → V transition (no commit yet — V's pair step will commit)
+      markTraceback(m, step.i, step.j, 'enter');
+      setStatus(`W[${step.i}, ${step.j}] — base ${step.k} pairs with ${step.j}, descending into V`);
     } else if (step.kind === 'pair') {
       state.pairs = step.pairs;
-      markTraceback(step.i, step.j, 'commit');
+      markTraceback(m, step.i, step.j, 'commit');
       updateDotBracket(state.pairs, [step.k, step.j]);
       const db = pairsToDotBracket(state.seq.length, state.pairs);
       state.lastDb = db;
       if (!opts.deferFornac) renderFornacIfChanged(db);
-      setStatus(`pair committed: (${step.k}, ${step.j}) — ${state.pairs.length} so far`);
+      const ki = step.k !== undefined ? step.k : step.i;
+      setStatus(`pair committed: (${ki}, ${step.j}) — ${state.pairs.length} so far`);
+    } else if (step.kind === 'hairpin') {
+      setStatus(`V[${step.i}, ${step.j}] = hairpin loop (terminates)`);
+    } else if (step.kind === 'stack') {
+      setStatus(`V[${step.i}, ${step.j}] = stack on (${step.i+1}, ${step.j-1})`);
+    } else if (step.kind === 'internal') {
+      setStatus(`V[${step.i}, ${step.j}] = internal loop, recurse to V[${step.ki}, ${step.kj}]`);
     }
     return;
   }
@@ -589,12 +873,14 @@ function applyStepInc(step, opts) {
 function rebuildUpTo(idx) {
   // Reset visuals + counters, then replay steps[0..idx] without
   // rendering fornac per step. Render once at the end.
-  buildMatrix(state.seq, state.minLoop);
+  buildMatrices(state.seq, state.minLoop, state.algo.matrices);
   buildDotBracket(state.seq);
-  state.maxValue = 0;
   state.nFill = 0;
   state.pairs = [];
   state.lastDb = '.'.repeat(state.seq.length);
+  for (const m of state.algo.matrices) {
+    state.matrixRange[m.name] = { min: 0, max: 0, invert: state.algoKey === 'nussinov' };
+  }
 
   for (let i = 0; i <= idx; i++) {
     applyStepInc(state.steps[i], { deferFornac: true });
@@ -753,6 +1039,7 @@ populatePresets(2);   // default to "1ZIH RNA hairpin (12 nt)" — small + has 3
 $('#preset').addEventListener('change', () => applyPreset($('#preset').value));
 $('#seq').addEventListener('change', () => { $('#preset').value = 'custom'; reset(); });
 $('#minloop').addEventListener('change', reset);
+$('#algo').addEventListener('change', reset);
 $('#reset').addEventListener('click', rewindAll);
 $('#back').addEventListener('click', goBack);
 $('#step').addEventListener('click', () => { pausePlay(); goForward(); });
@@ -771,8 +1058,9 @@ document.addEventListener('keydown', e => {
 
 // boot — apply default preset, then let URL params override
 const params = new URLSearchParams(location.search);
-if (params.has('speed')) $('#speed').value = params.get('speed');
+if (params.has('speed'))   $('#speed').value = params.get('speed');
 if (params.has('minloop')) $('#minloop').value = params.get('minloop');
+if (params.has('algo'))    $('#algo').value = params.get('algo');
 
 if (params.has('seq')) {
   $('#seq').value = params.get('seq');

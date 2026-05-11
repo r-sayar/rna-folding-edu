@@ -20,28 +20,51 @@ same thing on real data.
 
 ### Browser visualizer
 
-`visualizer/index.html` is a single-page tool that walks through the
-Nussinov DP step-by-step. Four panels:
+`visualizer/index.html` is a single-page tool that walks through either
+**Nussinov** (max base pairs, one DP matrix M) or a simplified **Zuker**
+(min free energy, two DP matrices W and V) step-by-step. Pick the
+algorithm from the top-left dropdown.
 
-1. **DP matrix** (heatmap) — fills diagonally
+Four panels:
+
+1. **DP matrix(es)** (heatmap) — fill diagonally; for Zuker you see W
+   stacked on top of V. Negative energies render blue (favorable),
+   positive penalties render red (unfavorable loop costs).
 2. **Predicted 2D structure** — re-rendered with [fornac](https://github.com/ViennaRNA/fornac)
    after each traceback commit, so you literally watch the strand fold
    from a straight line into a stem-loop
 3. **Experimental 3D structure** — fetched from the RCSB PDB and
    rendered in cartoon style with [3Dmol.js](https://github.com/3dmol/3Dmol.js),
-   so you can compare Nussinov's planar guess against the real fold
+   so you can compare the planar prediction against the real fold
 4. **Dot-bracket strip** — pairs commit one at a time
 
 ![visualizer screenshot](visualizer/preview.png)
 
-Above: the **1RNK pseudoknot**. Nussinov returns two separate hairpins
-(top right) — but the real molecule (bottom right) has crossing pairs,
-which a planar DP can't represent. The visualizer makes that limitation
-visible at a glance.
+Above: the **1RNK pseudoknot** under Nussinov. Nussinov returns two
+separate hairpins (top right) — but the real molecule (bottom right)
+has crossing pairs, which a planar DP can't represent. The visualizer
+makes that limitation visible at a glance.
+
+![Zuker on the same GC hairpin](visualizer/preview-zuker.png)
+
+Above: **Zuker** on `CGCGAAUUCGCG`. Two matrices: W (any pairing) above,
+V (assuming i,j pair) below. Positive cells (red) are loop penalties;
+negative cells (blue) are stacks paying off the loop cost. For this
+sequence Nussinov gives the awkward `((((...).)))` (still 4 pairs but
+strange placement to maximise count) — Zuker, scoring the energy of
+the closed loop, picks the clean `((((....))))` instead. That's the
+classic reason Zuker beats Nussinov in practice.
 
 Controls: **Reset** rewinds to before any step; **◀ Back** undoes the
 last step; **Play** auto-runs (toggle to Pause); **Next ▶** advances one
 step. Keyboard: ← / → step back / forward, space toggles play.
+
+The simplified Zuker scores hairpins, stacks, and internal/bulge loops
+with integer pseudo-energies (`stack = -3`, `hairpin = 5 + len-3`,
+`internal = 3 + unpaired`). It does **not** model multi-loops, so
+sequences requiring true multi-loops (like tRNA cloverleaves) won't
+fold optimally — for those, real Zuker (RNAfold / mfold) introduces a
+third matrix WM with a multi-loop initiation cost.
 
 Open the file directly in a browser, or serve the directory:
 
@@ -54,7 +77,7 @@ python3 -m http.server 8765
 Or, hosted: <https://r-sayar.github.io/rna-folding-edu/visualizer/>.
 
 URL parameters (all optional):
-`?seq=GGGAAACCC&minloop=3&speed=20&autoplay=1&pdb=1EHZ`.
+`?algo=nussinov|zuker&seq=GGGAAACCC&minloop=3&speed=20&autoplay=1&pdb=1EHZ`.
 
 Built-in presets carry their own PDB IDs where one exists — pick
 "1EHZ yeast tRNA-Phe" or "1Y26 adenine riboswitch" to get the 3D
@@ -139,8 +162,9 @@ educational_tools/
 ├── nussinov_vs_efold.py      # ~210 LOC, stdlib + optional efold
 ├── dreem_em_demo.py          # ~210 LOC, numpy + optional matplotlib
 └── visualizer/
-    ├── index.html            # the page (own JS, ~500 lines inline)
-    ├── preview.png           # screenshot of folded 1RNK pseudoknot
+    ├── index.html            # the page (own JS, ~750 lines inline)
+    ├── preview.png           # screenshot of folded 1RNK pseudoknot (Nussinov)
+    ├── preview-zuker.png     # screenshot of folded GC hairpin (Zuker)
     ├── NOTICE.md             # third-party attribution
     └── vendor/
         ├── fornac/           # Apache-2.0 — fornac.js + d3.js + LICENSE
