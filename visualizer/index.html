@@ -238,6 +238,10 @@
       <span><i style="background: var(--pair)"></i>traceback commit</span>
       <span><i style="background: var(--pair-soft)"></i>traceback path</span>
     </div>
+    <div id="realworld-block" style="margin-top:12px;padding-top:10px;border-top:1px solid var(--grid)">
+      <h3 style="margin:0 0 6px 0;font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:0.05em">Used in the wild</h3>
+      <ul id="realworld" style="margin:0;padding:0;list-style:none;font-size:12px"></ul>
+    </div>
   </section>
 
   <section id="panel-structure" class="panel">
@@ -522,6 +526,11 @@ const ALGORITHMS = {
     matrices: [{ name: 'M', title: "M[i][j] — max base pairs in seq[i..j]" }],
     steps: nussinovSteps,
     cellWidthPx: 26,
+    realWorld: [
+      { repo: 'BackofenLab/RNA-Playground', note: 'Original Nussinov teaching tool (the layout that inspired this page).' },
+      { repo: 'LinearFold/LinearFold',      note: 'LinearFold uses Nussinov as the baseline benchmark when reporting linear-time MFE folding.' },
+      { repo: 'rouskinlab/efold',           note: 'eFold paper compares its learned predictor against Nussinov + Zuker baselines.' },
+    ],
   },
   zuker: {
     label: 'Zuker (min free energy, simplified)',
@@ -532,6 +541,12 @@ const ALGORITHMS = {
     steps: zukerSteps,
     cellWidthPx: 34,
     infValue: ZUKER_INF,
+    realWorld: [
+      { repo: 'ViennaRNA/ViennaRNA',        note: 'RNAfold — the canonical Zuker implementation with full Turner 2004 energy parameters.' },
+      { repo: 'LinearFold/LinearFold',      note: 'Linear-time approximation of Zuker MFE folding — used at scale by Pfizer/Moderna for vaccine RNA design.' },
+      { repo: 'rouskinlab/seismic-rna',     note: 'DMS-MaPseq pipeline that calls RNAfold (Zuker) on the consensus structure of each read cluster.' },
+      { repo: 'rouskinlab/efold',           note: 'Learned alternative to Zuker — trained on the same RNA-structure task this page demonstrates.' },
+    ],
   },
 };
 
@@ -696,6 +711,30 @@ function markTraceback(matrix, i, j, kind) {
 
 function setStatus(msg) { $('#status').textContent = msg; }
 
+function renderRealWorld(list) {
+  const ul = document.getElementById('realworld');
+  if (!ul) return;
+  ul.innerHTML = '';
+  for (const r of list) {
+    const li = document.createElement('li'); li.style.margin = '6px 0';
+    const a = document.createElement('a');
+    a.href = `https://github.com/${r.repo}`;
+    a.target = '_blank'; a.rel = 'noopener';
+    a.textContent = r.repo;
+    a.style.fontFamily = 'ui-monospace, SFMono-Regular, Menlo, monospace';
+    a.style.fontSize = '11px';
+    a.style.color = 'var(--accent)';
+    li.appendChild(a);
+    const note = document.createElement('span');
+    note.textContent = r.note;
+    note.style.color = 'var(--muted)';
+    note.style.display = 'block';
+    note.style.marginTop = '2px';
+    li.appendChild(note);
+    ul.appendChild(li);
+  }
+}
+
 function renderFornac(seq, dotbracket) {
   const host = document.getElementById('rna_ss');
   host.innerHTML = '';
@@ -801,6 +840,7 @@ function reset() {
 
   buildMatrices(seq, minLoop, algo.matrices);
   buildDotBracket(seq);
+  renderRealWorld(algo.realWorld || []);
   renderFornac(seq, state.lastDb);
   fornacRenderedDb = state.lastDb;
   setStatus(`ready — ${algo.label}; ${seq.length} nt, ${steps.length} total steps`);
