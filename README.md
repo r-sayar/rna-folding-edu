@@ -10,6 +10,12 @@ The goal is *pedagogical*: each demo implements the central algorithm
 from scratch, then connects it to a production-grade tool that does the
 same thing on real data.
 
+For the **non-RNA** algorithms in the same course (HMM Viterbi,
+Needleman-Wunsch / Smith-Waterman, Evoformer block, protein
+structure-similarity scores, phylogenetic tree reconstruction), see the
+sister repo **[algbio-edu](https://github.com/r-sayar/algbio-edu)**
+([live demos](https://r-sayar.github.io/algbio-edu/)).
+
 ## What's here
 
 | File | Lecture concept | Bridge to research code |
